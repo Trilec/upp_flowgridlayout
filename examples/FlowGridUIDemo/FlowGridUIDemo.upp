@@ -1,0 +1,12 @@
+description "FlowGridLayout UI Demo & Test Suite (Ops Table Pattern)\377";
+
+uses
+	CtrlLib,
+	FlowGridLayout;
+
+file
+	main.cpp;
+
+mainconfig
+	"" = "";
+

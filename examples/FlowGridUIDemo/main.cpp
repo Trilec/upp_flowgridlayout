@@ -84,56 +84,66 @@ private:
     }
 
     virtual void Paint(Draw& w) override {
-        Size sz = GetSize();
-        
-        
-        // Antialiased rounded rect using DrawPainter
-        {
-            DrawPainter p(w, sz);
-            p.DrawRect(sz, SColorFace());
-            if(fillBody) {
-                p.Begin();
-                p.RoundedRectangle(0.5, 0.5, sz.cx - 1.0, sz.cy - 1.0, (double)radius, (double)radius);
-                p.End();
-                p.Fill(bg);
-            }
-            if(showFrame) {
-                p.Begin();
-                p.RoundedRectangle(1.0, 1.0, sz.cx - 2.0, sz.cy - 2.0, (double)radius, (double)radius);
-                p.End();
-                p.Stroke(2.0, border);
-            }
+    const Size sz = GetSize();
+
+    // --- Transparent offscreen ---
+    ImageBuffer ib(sz);
+    RGBA *px = ~ib;
+    for(int i = 0; i < ib.GetLength(); ++i)
+        px[i] = RGBAZero();              // (0,0,0,0) premultiplied transparent
+
+    {
+        BufferPainter p(ib);             // AA paths on the buffer
+
+        if(fillBody) {
+            p.Begin();
+            p.RoundedRectangle(0.5, 0.5, sz.cx - 1.0, sz.cy - 1.0,
+                               (double)radius, (double)radius);
+            p.End();
+            p.Fill(bg);                  // can be opaque or semi-transparent
         }
 
-        // Foreground text (title left, badge right, wrapped body)
-        Rect c = Rect(sz).Deflated(padx, pady);
-
-        const int titleLH = titleFont.GetLineHeight();
-        const int badgeLH = badgeFont.GetLineHeight();
-        const int lineH   = max(titleLH, badgeLH);
-
-        int y = c.top;
-
-        if(!IsNull(badge)) {
-            Size bs = GetTextSize(badge, badgeFont);
-            int by  = y + (lineH - badgeLH) / 2;
-            w.DrawText(c.right - bs.cx, by, badge, badgeFont, badgeInk);
-        }
-
-        int ty = y + (lineH - titleLH) / 2;
-        w.DrawText(c.left, ty, title, titleFont, titleInk);
-        y += lineH + gapTitle;
-
-        if(!IsNull(body)) {
-            String wrapped = WrapToWidth(body, bodyFont, c.GetWidth());
-            int lh = bodyFont.GetLineHeight();
-            for(const String& line : Split(wrapped, '\n')) {
-                w.DrawText(c.left, y, line, bodyFont, bodyInk);
-                y += lh;
-                if(y > c.bottom) break;
-            }
+        if(showFrame) {
+            p.Begin();
+            p.RoundedRectangle(1.0, 1.0, sz.cx - 2.0, sz.cy - 2.0,
+                               (double)radius, (double)radius);
+            p.End();
+            p.Stroke(2.0, border);
         }
     }
+
+    // Composite with alpha (no hairlines, no SetKind needed)
+    w.DrawImage(0, 0, ib);
+
+    // --- Foreground text ---
+    Rect c = Rect(sz).Deflated(padx, pady);
+
+    const int titleLH = titleFont.GetLineHeight();
+    const int badgeLH = badgeFont.GetLineHeight();
+    const int lineH   = max(titleLH, badgeLH);
+
+    int y = c.top;
+
+    if(!IsNull(badge)) {
+        const Size bs = GetTextSize(badge, badgeFont);
+        w.DrawText(c.right - bs.cx, y + (lineH - badgeLH) / 2,
+                   badge, badgeFont, badgeInk);
+    }
+
+    w.DrawText(c.left, y + (lineH - titleLH) / 2, title, titleFont, titleInk);
+    y += lineH + gapTitle;
+
+    if(!IsNull(body)) {
+        const String wrapped = WrapToWidth(body, bodyFont, c.GetWidth());
+        const int lh = bodyFont.GetLineHeight();
+        for(const String& line : Split(wrapped, '\n')) {
+            w.DrawText(c.left, y, line, bodyFont, bodyInk);
+            y += lh;
+            if(y > c.bottom) break;
+        }
+    }
+}
+
 };
 
 
@@ -171,8 +181,8 @@ public:
         area.Horz(flow_left, grid_right).SetPos(4500);
 
         // Topbar (wraps, non-scrolling)
-        topbar.SetMode(FGLMode::Flow).SetDirection(FGLDir::LeftToRight).SetWrap(true)
-              .SetScrollMode(FGLScroll::None).SetGroupHeaders(false);
+        topbar.SetMode(FlowGridLayout::Flow).SetDirection(FlowGridLayout::H).SetWrap(true)
+              .SetScrollMode(FlowGridLayout::AutoScroll).SetGroupHeaders(false);
 
         {
             int c = topbar.NewCluster();
@@ -195,19 +205,19 @@ public:
             search.SetText("Search…");
             topbar.Add(search, c, false, Size(DPIx(260), DPIx(28)));
 
-            topbar.AddExpander(1, c);
+            topbar.AddExpand(1, c);
 
             auto quick = [&](const char *txt)->Button& { Button& b = buttons.Create(); b.SetLabel(txt); return b; };
             for(const char *s : { "⏺", "⏱", "🖫", "📄" })
                 topbar.Add(quick(s), c, false, Size(DPIx(34), DPIx(28)));
 
-            topbar.AddExpander(1, c);
+            topbar.AddExpand(1, c);
             for(const char *s : { "—", "▢", "✕" })
                 topbar.Add(quick(s), c, false, Size(DPIx(34), DPIx(28)));
         }
 
         // Middle (clusters + edge cases)
-        mid.SetMode(FGLMode::Flow).SetWrap(true).SetScrollMode(FGLScroll::None).SetGroupHeaders(true);
+        mid.SetMode(FlowGridLayout::Flow).SetWrap(true).SetScrollMode(FlowGridLayout::AutoScroll).SetGroupHeaders(true);
         mid.WhenClusterText([&](int gid){
             switch(gid) { case 0: return String("Tools"); case 1: return String("Style"); case 2: return String("Controls"); }
             return Format("Cluster %d", gid);
@@ -223,11 +233,11 @@ public:
         // Style centered
         {
             int g = mid.NewCluster(); mid.SetClusterHeader(g, true, false);
-            mid.AddExpander(1, g);
+            mid.AddExpand(1, g);
             auto mk = [&](const char *lab)->Button& { Button& b = buttons.Create(); b.SetLabel(lab); return b; };
             for(const char* s : { "⎺_", "◻", "⬛" })
                 mid.Add(mk(s), g, false, Size(DPIx(48), DPIx(28)));
-            mid.AddExpander(1, g);
+            mid.AddExpand(1, g);
         }
         // Controls sampler
         {
@@ -261,8 +271,8 @@ public:
         }
 
         // Bottom: flow left + grid right in a Splitter
-        flow_left.SetMode(FGLMode::Flow).SetWrap(true).SetUnifiedItemSize(Size(DPIx(92), DPIx(28)), true)
-                  .SetScrollMode(FGLScroll::Auto);
+        flow_left.SetMode(FlowGridLayout::Flow).SetWrap(true).SetUnifiedItemSize(Size(DPIx(92), DPIx(28)), true)
+                  .SetScrollMode(FlowGridLayout::AutoScroll);
         flow_left.Add(MakeHeader(labels, "Bottom Left — Flow with unified item size & wrap"));
         flow_left.AddGap(DPIx(8));
         for(const char* s : { "Reset", "Duplicate", "Delete", "Clear", "Flip X", "Flip Y", "Copy" }) {
@@ -274,7 +284,7 @@ public:
         Option& ob = opts.Create(); ob.SetLabel("Option B"); flow_left.Add(ob);
         Option& oc = opts.Create(); oc.SetLabel("Option C"); flow_left.Add(oc);
 
-        grid_right.SetMode(FGLMode::Grid).SetScrollMode(FGLScroll::Auto);
+        grid_right.SetMode(FlowGridLayout::Grid).SetScrollMode(FlowGridLayout::AutoScroll);
         grid_right.AddGrid(MakeHeader(labels, "Bottom Right — Grid 3x3"), 0, 0, false, Size(DPIx(220), DPIx(24)));
         for(int r = 1; r <= 3; ++r)
             for(int c = 0; c < 3; ++c) {
@@ -324,8 +334,8 @@ public:
 
         center.SetFrame(ThinInsetFrame());
 
-        left.SetMode(FGLMode::Flow).SetWrap(true).SetScrollMode(FGLScroll::Auto);
-        right.SetMode(FGLMode::Flow).SetWrap(true).SetScrollMode(FGLScroll::Auto);
+        left.SetMode(FlowGridLayout::Flow).SetWrap(true).SetScrollMode(FlowGridLayout::AutoScroll);
+        right.SetMode(FlowGridLayout::Flow).SetWrap(true).SetScrollMode(FlowGridLayout::AutoScroll);
 
         left.Add(MakeHeader(labels, "Left Panel"));
         left.AddGap(DPIx(6));
@@ -354,54 +364,86 @@ public:
     PositioningView() {
         Add(sticky);
         sticky.SetText("Sticky Subheader (Fixed)");
-        sticky.SetFrame(ThinInsetFrame());
+        sticky.SetFrame(NullFrame());
         sticky.SetAlign(ALIGN_CENTER);
 
         Add(body);
-        body.SetMode(FGLMode::Flow).SetWrap(true).SetScrollMode(FGLScroll::Auto);
+        body.SetMode(FlowGridLayout::Flow)
+            .SetWrap(true)
+            .SetScrollMode(FlowGridLayout::AutoScroll)
+            .SetGroupHeaders(false);
 
-        body.Add(MakeHeader(labels, "Tiles"));
-        body.AddGap(DPIx(6));
-        for(int i = 1; i <= 8; i++) {
-            Label& x = labels.Create();
-            x.SetText(Format("Tile %d", i));
-            x.SetFrame(ThinInsetFrame());
-            x.SetAlign(ALIGN_CENTER);
-            body.Add(x, -1, true, Size(DPIx(120), DPIx(64)));
+        // Section header card: "Tiles" / "Positioning Test" (no fill, no border)
+        ShowcaseCard& hdr = cards.Create();
+        hdr.EnableFrame(false).EnableFill(false)
+           .SetTitle("Tiles", StdFont().Bold().Height(12))
+           .SetBody("Positioning Test", StdFont().Height(11));
+        body.Add(hdr, -1, false, Size(DPI(220), DPI(26)));
+        body.AddGap(DPI(6));
+
+        // 8 tile cards (border + light fill)
+        for (int i = 1; i <= 8; ++i) {
+            ShowcaseCard& tile = cards.Create();
+            tile.EnableFrame(true).EnableFill(true)
+                .SetRadius(DPI(8))
+                .SetTitle(Format("Tile %d", i), StdFont().Bold().Height(12))
+                .SetBody("Preview", StdFont().Height(11));
+            body.Add(tile, -1, true, Size(DPI(140), DPI(76)));
         }
     }
-    virtual void Layout() override {
-        const int header_h = DPIx(24);
+
+    void Layout() override {
+        const int header_h = DPI(24);
         Rect v = GetView();
         sticky.SetRect(v.left, v.top, v.GetWidth(), header_h);
         body  .SetRect(v.left, v.top + header_h, v.GetWidth(), v.GetHeight() - header_h);
     }
+
 private:
-    Label          sticky;
-    FlowGridLayout body;
-    Array<Label>   labels;
+    Label            sticky;
+    FlowGridLayout   body;
+    Array<ShowcaseCard> cards;   // <-- lifetime owned by the view
 };
+
+
 
 class GridView : public Ctrl {
 public:
     GridView() {
         Add(fg);
-        fg.SetMode(FGLMode::Flow).SetWrap(true).SetScrollMode(FGLScroll::Auto);
-        fg.Add(MakeHeader(labels, "Responsive Reflow — shrink window to see wrap"));
-        fg.AddGap(DPIx(8));
-        for(const char *t : { "Left", "Center", "Right" }) {
-            Label& c = labels.Create();
-            c.SetText(t);
-            c.SetFrame(ThinInsetFrame());
-            c.SetAlign(ALIGN_CENTER);
-            fg.Add(c, -1, true, Size(DPIx(220), DPIx(80)));
-        }
+        fg.SetMode(FlowGridLayout::Flow)
+          .SetWrap(true)
+          .SetScrollMode(FlowGridLayout::AutoScroll)
+          .SetGroupHeaders(false);
+
+        // Section header: "Grid" / "Responsive reflow …"
+        ShowcaseCard& hdr = cards.Create();
+        hdr.EnableFrame(false).EnableFill(false)
+           .SetTitle("Grid", StdFont().Bold().Height(12))
+           .SetBody("Responsive reflow — shrink window to see wrap", StdFont().Height(11));
+        fg.Add(hdr, -1, false, Size(DPI(320), DPI(26)));
+        fg.AddGap(DPI(8));
+
+        auto add_card = [&](const char* t) {
+            ShowcaseCard& c = cards.Create();
+            c.EnableFrame(true).EnableFill(true)
+             .SetRadius(DPI(8))
+             .SetTitle(t, StdFont().Bold().Height(12))
+             .SetBody("Demo panel", StdFont().Height(11));
+            fg.Add(c, -1, true, Size(DPI(220), DPI(86)));
+        };
+        add_card("Left");
+        add_card("Center");
+        add_card("Right");
     }
-    virtual void Layout() override { fg.SetRect(GetView()); }
+
+    void Layout() override { fg.SetRect(GetView()); }
+
 private:
-    FlowGridLayout fg;
-    Array<Label>   labels;
+    FlowGridLayout      fg;
+    Array<ShowcaseCard> cards;   // <-- owns all card controls
 };
+
 
 // =====================================================
 // Playground window
@@ -418,9 +460,9 @@ public:
 	    root.Add(header, DPI(80), false, DPI(0));
 	    root.Add(stack,  DPI(0),  true,  DPI(8));
 	
-	    header.SetMode(FGLMode::Flow)
+	    header.SetMode(FlowGridLayout::Flow)
 	          .SetWrap(true)
-	          .SetScrollMode(FGLScroll::None)
+	          .SetScrollMode(FlowGridLayout::AutoScroll)
 	          .SetGroupHeaders(false);
 	    header.WhenContentSize = [&](Size){ RefreshLayout(); };
 	
@@ -434,11 +476,13 @@ public:
 	        .SetBadge("")
 	        .EnableFrame(false).EnableFill(false)
 	        .SetRadius(DPI(12));
-	    header.Add(cardTitle, cTitle, true, Size(DPI(560), DPI(110)));
+	        
+	    header.Add(cardTitle, cTitle, true, Size(DPI(530), DPI(80)));
 	
-	    // Info card (≈30% smaller than 280 -> 196)
+
 	    int cInfo = header.NewCluster();
 	    header.SetClusterBox(cInfo, false);
+	    
 	    cardInfo
 	        .SetTitle("Showcase", StdFont().Bold().Height(12))
 	        .SetBadge("")
@@ -446,11 +490,12 @@ public:
 	                 StdFont().Height(12))
 	        .EnableFrame(true).EnableFill(true)
 	        .SetRadius(DPI(12));
-	    header.Add(cardInfo, cInfo, true, Size(DPI(196), DPI(110)));
+	    header.Add(cardInfo, cInfo, true, Size(DPI(190), DPI(80)));
 	
 	    // *** spacer between info card and nav buttons ***
-	    header.AddGap(DPI(12));
-	
+	    //header.AddGap(DPI(12));
+	    header.AddExpand(1);
+	    
 	    // Nav buttons (wrap)
 	    int cNav = header.NewCluster();
 	    header.SetClusterBox(cNav, false);
@@ -465,7 +510,7 @@ public:
 	    add_nav("▥", "Panels",      1);
 	    add_nav("▤", "Positioning", 2);
 	    add_nav("▦", "Grid",        3);
-	
+
 	    // stack pages
 	    stack.AddPage(view_widgets);
 	    stack.AddPage(view_panels);
